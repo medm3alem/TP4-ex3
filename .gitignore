@@ -1,0 +1,39 @@
+# Fichiers LaTeX temporaires
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.bbl
+*.blg
+
+# Fichiers gem5
+m5out_*/
+*.pyc
+__pycache__/
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# Fichiers d'éditeur
+.vscode/
+.idea/
+*.sublime-*
+
+# Fichiers de build
+build/
+dist/
+*.o
+*.so
+*.a
+
+# Fichiers temporaires
+temp/
+tmp/
+*.tmp

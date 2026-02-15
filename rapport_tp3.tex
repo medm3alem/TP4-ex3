@@ -1,0 +1,558 @@
+\documentclass[12pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% Configuration des listings
+\lstset{
+    language=bash,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray}\itshape,
+    stringstyle=\color{red},
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    backgroundcolor=\color{gray!10}
+}
+
+% Configuration hyperref
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+    pdftitle={TP3 - Mémoires Caches},
+}
+
+% Titre
+\title{
+    \textbf{TP3 - Évaluation des Performances} \\
+    \textbf{de Mémoires Caches} \\
+    \large Architecture des Microprocesseurs - ES201
+}
+\author{Votre Nom}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{Introduction}
+%=============================================================================
+
+Ce travail pratique a pour objectif d'évaluer les performances de différentes configurations de mémoires caches (instructions et données) pour 4 algorithmes de multiplication de matrices. La multiplication de matrices est une opération critique dont les performances dépendent fortement de l'organisation de la hiérarchie mémoire.
+
+\subsection{Contexte}
+
+Le taux de défauts de cache (\textit{miss rate}), défini comme le rapport entre le nombre d'accès qui se traduisent par un défaut de cache et le nombre total d'accès au cache, est le paramètre principal pour évaluer ces performances.
+
+\subsection{Outils utilisés}
+
+\begin{itemize}
+    \item \textbf{Simulateur :} gem5 version 23.0.0.1 (architecture RISC-V 64 bits)
+    \item \textbf{Scripts :} Bash pour l'automatisation des simulations
+    \item \textbf{Programmes testés :} 4 algorithmes de multiplication de matrices (128×128)
+    \begin{itemize}
+        \item P1 : \texttt{normale.riscv} - Multiplication classique (i-j-k)
+        \item P2 : \texttt{pointer.riscv} - Accès via pointeurs
+        \item P3 : \texttt{tempo.riscv} - Cache blocking (tiling)
+        \item P4 : \texttt{unrol.riscv} - Loop unrolling
+    \end{itemize}
+\end{itemize}
+
+%=============================================================================
+\section{Question 1 : Paramètres gem5}
+%=============================================================================
+
+\subsection{Configurations de caches}
+
+Nous considérons deux configurations de caches décrites dans le Tableau~\ref{tab:configs}.
+
+\begin{table}[H]
+\centering
+\caption{Configurations de caches pour 2 processeurs}
+\label{tab:configs}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Config} & \textbf{I-cache} & \textbf{D-cache} & \textbf{L2 cache} & \textbf{Block size} \\ 
+\midrule
+C1 & 4KB direct & 4KB direct & 32KB direct & 32 bytes \\
+C2 & 4KB direct & 4KB 2-way & 32KB 4-way & 32 bytes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Paramètres gem5}
+
+Le Tableau~\ref{tab:params} présente les paramètres gem5 correspondant à chaque configuration.
+
+\begin{table}[H]
+\centering
+\caption{Paramètres de cache pour chaque configuration (Tableau 8)}
+\label{tab:params}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Configuration} & \textbf{IL1} & \textbf{DL1} & \textbf{UL2} \\ 
+\midrule
+C1 & 4kB, 1-way, & 4kB, 1-way, & 32kB, 1-way, \\
+   & LRU, 32B & LRU, 32B & LRU, 32B \\
+\midrule
+C2 & 4kB, 1-way, & 4kB, 2-way, & 32kB, 4-way, \\
+   & LRU, 32B & LRU, 32B & LRU, 32B \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Implémentation dans gem5}
+
+Le fichier de configuration \texttt{se\_A7.py} implémente ces paramètres comme suit :
+
+\begin{lstlisting}[language=Python, caption=Extrait de se\_A7.py]
+# Configuration de base (C1)
+system.cache_line_size = 32
+system.cpu.icache = L1ICache()  # 4kB, assoc=1
+system.cpu.dcache = L1DCache()  # 4kB, assoc=1
+system.l2cache = L2Cache()      # 32kB, assoc=1
+
+# Passage en configuration C2
+if args.cacheconfig == "C2":
+    system.cpu.dcache.assoc = 2  # DL1: 2-way
+    system.l2cache.assoc = 4     # UL2: 4-way
+\end{lstlisting}
+
+\textbf{Notes importantes :}
+\begin{itemize}
+    \item Le cache d'instructions (IL1) reste direct-mapped dans les deux configurations
+    \item L'algorithme de remplacement LRU est utilisé par défaut dans gem5
+    \item La taille de bloc (block size) est uniforme : 32 bytes
+\end{itemize}
+
+%=============================================================================
+\section{Question 2 : Méthodologie et Résultats}
+%=============================================================================
+
+\subsection{Méthodologie de simulation}
+
+\subsubsection{Script de lancement des simulations}
+
+Pour automatiser les 8 simulations (4 programmes × 2 configurations), nous avons développé le script \texttt{simulations.sh} :
+
+\begin{lstlisting}[caption=simulations.sh - Script de lancement]
+#!/bin/bash
+# Simule les 8 cas : 4 programmes × 2 configs
+
+PROGS=("normale.riscv" "pointer.riscv" "tempo.riscv" "unrol.riscv")
+NAMES=("normale" "pointer" "tempo" "unrol")
+CONFIGS=("C1" "C2")
+GEM5="/root/gem5/build/RISCV/gem5.opt"
+
+echo "Lancement des 8 simulations..."
+start=$(date +%s)
+
+for i in "${!PROGS[@]}"; do
+    for cfg in "${CONFIGS[@]}"; do
+        out="m5out_${NAMES[$i]}_${cfg}"
+        echo "-> ${NAMES[$i]} - $cfg"
+        rm -rf "$out"
+        $GEM5 --outdir="$out" --redirect-stdout --redirect-stderr \
+              se_A7.py --cmd "exo3/${PROGS[$i]}" --cacheconfig "$cfg"
+        [ -f "$out/stats.txt" ] && echo "  OK" || echo "  ERREUR"
+    done
+done
+
+echo "Termine en $(($(date +%s)-start))s"
+\end{lstlisting}
+
+Ce script génère 8 dossiers de sortie : \texttt{m5out\_normale\_C1}, \texttt{m5out\_normale\_C2}, etc., chacun contenant un fichier \texttt{stats.txt} avec les statistiques de simulation.
+
+\subsubsection{Script d'extraction des résultats}
+
+Le script \texttt{resultats.sh} extrait automatiquement les miss rates des fichiers \texttt{stats.txt} :
+
+\begin{lstlisting}[caption=resultats.sh - Extraction des miss rates]
+#!/bin/bash
+get_stat() { 
+    grep "^$2" "$1/stats.txt" 2>/dev/null | awk '{print $2}' 
+}
+percent() { 
+    awk -v m=$1 -v a=$2 'BEGIN {
+        if(a>0) printf "%.2f",m/a*100; else print "0.00"
+    }' 
+}
+
+# Exemple pour I-cache
+for p in "${PROGS[@]}"; do
+    for c in "${CONFIGS[@]}"; do
+        d="m5out_${p}_${c}"
+        m=$(get_stat "$d" "system.cpu.icache.overallMisses::total")
+        a=$(get_stat "$d" "system.cpu.icache.overallAccesses::total")
+        printf "%.2f%%" "$(percent ${m:-0} ${a:-1})"
+    done
+done
+\end{lstlisting}
+
+\textbf{Statistiques gem5 utilisées :}
+\begin{itemize}
+    \item I-cache : \texttt{system.cpu.icache.overallMisses::total} et \texttt{overallAccesses::total}
+    \item D-cache : \texttt{system.cpu.dcache.overallMisses::total} et \texttt{overallAccesses::total}
+    \item L2 cache : \texttt{system.l2cache.overallMisses::total} et \texttt{overallAccesses::total}
+\end{itemize}
+
+\subsection{Résultats obtenus}
+
+La Figure~\ref{fig:resultats} présente les résultats complets des simulations.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{tp3.png}
+\caption{Résultats des simulations - Miss rates pour les 3 niveaux de cache}
+\label{fig:resultats}
+\end{figure}
+
+\subsubsection{Tableau 9 - Instruction Cache Miss Rate}
+
+\begin{table}[H]
+\centering
+\caption{Instruction Cache (IL1) Miss Rate (\%)}
+\label{tab:icache}
+\begin{tabular}{@{}lccr@{}}
+\toprule
+\textbf{Programme} & \textbf{C1 (\%)} & \textbf{C2 (\%)} & \textbf{Δ C1→C2} \\ 
+\midrule
+P1 (normale) & 2.16 & 2.16 & 0.00\% \\
+P2 (pointer) & 0.07 & 0.07 & 0.00\% \\
+P3 (tempo)   & 2.33 & 2.32 & -0.01\% \\
+P4 (unrol)   & 0.17 & 0.17 & 0.00\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Tableau 10 - Data Cache Miss Rate}
+
+\begin{table}[H]
+\centering
+\caption{Data Cache (DL1) Miss Rate (\%)}
+\label{tab:dcache}
+\begin{tabular}{@{}lccr@{}}
+\toprule
+\textbf{Programme} & \textbf{C1 (\%)} & \textbf{C2 (\%)} & \textbf{Δ C1→C2} \\ 
+\midrule
+P1 (normale) & 51.43 & 44.65 & \textcolor{green}{-6.78\%} \\
+P2 (pointer) & 51.47 & 45.83 & \textcolor{green}{-5.64\%} \\
+P3 (tempo)   & 50.99 & 44.18 & \textcolor{green}{-6.81\%} \\
+P4 (unrol)   & 51.53 & 43.98 & \textcolor{green}{-7.55\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Tableau 11 - Unified L2 Cache Miss Rate}
+
+\begin{table}[H]
+\centering
+\caption{Unified L2 Cache (UL2) Miss Rate (\%)}
+\label{tab:l2cache}
+\begin{tabular}{@{}lccr@{}}
+\toprule
+\textbf{Programme} & \textbf{C1 (\%)} & \textbf{C2 (\%)} & \textbf{Δ C1→C2} \\ 
+\midrule
+P1 (normale) & 51.51 & 45.66 & \textcolor{green}{-5.85\%} \\
+P2 (pointer) & 50.99 & 44.59 & \textcolor{green}{-6.40\%} \\
+P3 (tempo)   & 51.55 & 45.92 & \textcolor{green}{-5.63\%} \\
+P4 (unrol)   & 51.51 & 46.16 & \textcolor{green}{-5.35\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%=============================================================================
+\section{Analyse et Interprétations}
+%=============================================================================
+
+\subsection{Analyse du cache d'instructions (Tableau 9)}
+
+\subsubsection{Observations principales}
+
+\begin{itemize}
+    \item \textbf{Miss rates très faibles :} Tous les programmes affichent des taux de défaut inférieurs à 2.5\%
+    \item \textbf{Aucune amélioration C1→C2 :} Le cache d'instructions reste direct-mapped dans les deux configurations
+    \item \textbf{Variation entre programmes :}
+    \begin{itemize}
+        \item \texttt{pointer} : 0.07\% (meilleur) - 1364 misses pour 2,095,967 accès
+        \item \texttt{unrol} : 0.17\% - Code déroulé mais très réutilisé
+        \item \texttt{normale} : 2.16\% - Structure de boucle classique
+        \item \texttt{tempo} : 2.33\% (moins bon) - Code de blocking plus complexe
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{Interprétation}
+
+Ces résultats exceptionnels s'expliquent par :
+
+\begin{enumerate}
+    \item \textbf{Localité temporelle exceptionnelle :} Les boucles de multiplication sont exécutées $N^3 \approx 2$ millions de fois ($N=128$). Le même petit corps de boucle (50-200 bytes) est réutilisé massivement.
+    
+    \item \textbf{Taille du code $\ll$ Taille du cache :} Le code actif (~500 bytes à 1 kB) tient entièrement dans le cache d'instructions de 4 kB. Aucun \textit{capacity miss}.
+    
+    \item \textbf{Localité spatiale efficace :} Avec un block size de 32 bytes, chaque chargement apporte plusieurs instructions consécutives (prefetching naturel).
+\end{enumerate}
+
+\subsection{Analyse du cache de données (Tableau 10)}
+
+\subsubsection{Observations principales}
+
+\begin{itemize}
+    \item \textbf{Miss rates très élevés :} Entre 44\% et 52\%, indiquant un \textit{thrashing} sévère
+    \item \textbf{Amélioration significative C1→C2 :} De 5.64\% à 7.55\% de réduction
+    \item \textbf{Meilleur gain :} \texttt{unrol} avec -7.55\%
+    \item \textbf{Performances similaires :} Tous les algorithmes sont limités par la capacité
+\end{itemize}
+
+\subsubsection{Interprétation}
+
+Les miss rates élevés s'expliquent par un problème de \textbf{capacité} :
+
+\begin{itemize}
+    \item \textbf{Taille des données :} 3 matrices de $128 \times 128$ doubles = $3 \times 128 \times 128 \times 8 = 384$ kB
+    \item \textbf{Taille du cache :} DL1 = 4 kB seulement
+    \item \textbf{Ratio :} $384 / 4 = 96$ : les données dépassent le cache d'un facteur 96
+\end{itemize}
+
+L'amélioration C1→C2 provient de :
+\begin{itemize}
+    \item \textbf{Réduction des conflict misses :} La 2-way associativité du DL1 réduit les collisions
+    \item \textbf{Meilleure répartition :} Les accès mémoire se répartissent mieux dans les ensembles
+\end{itemize}
+
+Résultat surprenant : \texttt{tempo} (cache blocking) n'obtient \textbf{pas} de gain majeur. Le blocking est optimisé pour des caches plus grands (>32 kB). Avec un cache de 256 kB, on s'attendrait à une réduction du miss rate à 20-30\%.
+
+\subsection{Analyse du cache L2 (Tableau 11)}
+
+\subsubsection{Observations principales}
+
+\begin{itemize}
+    \item \textbf{Miss rates très élevés :} Entre 44\% et 52\%, similaires au DL1
+    \item \textbf{Amélioration modérée C1→C2 :} De 5.35\% à 6.40\%
+    \item \textbf{Performances homogènes :} Peu de différence entre les 4 algorithmes
+\end{itemize}
+
+\subsubsection{Interprétation}
+
+Le L2 de 32 kB souffre du même problème de capacité :
+\begin{itemize}
+    \item \textbf{Ratio :} $384 / 32 = 12$ : les données dépassent le L2 d'un facteur 12
+    \item \textbf{Thrashing :} La majorité des accès L2 vont en RAM
+    \item \textbf{4-way associativity :} Aide mais ne résout pas le problème fondamental
+\end{itemize}
+
+\textbf{Conclusion :} Le goulot d'étranglement est la \textbf{capacité}, pas l'organisation des caches.
+
+%=============================================================================
+\section{Question 3 : Localité de références pour le code}
+%=============================================================================
+
+\subsection{Question posée}
+
+Les 4 algorithmes de multiplication de matrices présentent-ils une bonne localité de références pour le code ? Pourquoi ?
+
+\subsection{Réponse : OUI, excellente localité}
+
+Les 4 algorithmes présentent une \textbf{excellente localité de références} pour le code (instructions), comme en témoignent les miss rates très faibles du cache d'instructions (0.07\% à 2.33\%).
+
+\subsection{Justifications}
+
+\subsubsection{1. Contraste instructions vs données}
+
+Le Tableau~\ref{tab:contraste} illustre le contraste frappant entre les performances du cache d'instructions et du cache de données.
+
+\begin{table}[H]
+\centering
+\caption{Contraste entre localité des instructions et des données}
+\label{tab:contraste}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Programme} & \textbf{I-cache (\%)} & \textbf{D-cache (\%)} & \textbf{Facteur} \\ 
+\midrule
+normale & 2.16  & 51.43 & ×24 \\
+pointer & 0.07  & 51.47 & ×735 \\
+tempo   & 2.33  & 50.99 & ×22 \\
+unrol   & 0.17  & 51.53 & ×303 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Le cache d'instructions est \textbf{22 à 735 fois plus efficace} que le cache de données.
+
+\subsubsection{2. Localité temporelle exceptionnelle}
+
+\begin{itemize}
+    \item \textbf{Réutilisation massive :} Pour \texttt{pointer}, seulement 1364 misses pour 2,095,967 accès instructions
+    \item \textbf{Calcul :} Le code est chargé une fois puis réutilisé $\approx 1500$ fois !
+    \item \textbf{Boucles imbriquées :} Exécution $N^3 = 128^3 \approx 2.1$ millions d'itérations
+\end{itemize}
+
+\subsubsection{3. Taille du code négligeable}
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{ll}
+\textbf{Corps de boucle :} & 50-200 bytes \\
+\textbf{Code total actif :} & $\sim$500 bytes - 1 kB \\
+\textbf{Cache IL1 :} & 4 kB \\
+\textbf{Ratio :} & Code / Cache $\approx$ 1/4 à 1/8
+\end{tabular}
+\caption{Comparaison taille code vs cache}
+\end{figure}
+
+Le code tient \textbf{entièrement} dans le cache. Aucun \textit{capacity miss}, seulement des \textit{compulsory misses} initiaux.
+
+\subsubsection{4. Inefficacité de l'associativité pour IL1}
+
+\begin{itemize}
+    \item \textbf{Observation :} C1 = C2 pour tous les programmes (Tableau 9)
+    \item \textbf{Explication :} IL1 reste direct-mapped dans les deux configurations
+    \item \textbf{Conclusion :} Avec un code aussi petit, il n'y a \textbf{aucun conflict miss}
+    \item \textbf{Implication :} Augmenter l'associativité de IL1 serait inutile (déjà optimal)
+\end{itemize}
+
+\subsection{Asymétrie fondamentale}
+
+La multiplication de matrices exhibe une \textbf{localité asymétrique} :
+
+\begin{center}
+\begin{tabular}{ccc}
+\textbf{Instructions} & & \textbf{Données} \\
+\textcolor{green}{Excellente} & vs & \textcolor{red}{Médiocre} \\
+0.07\% - 2.33\% & & 44\% - 52\% \\
+Petit code réutilisé $N^3$ fois & & Gros volume >> capacité
+\end{tabular}
+\end{center}
+
+Cette asymétrie est typique des algorithmes de \textbf{calcul scientifique} :
+\begin{itemize}
+    \item Un petit noyau de calcul (quelques dizaines d'instructions)
+    \item Appliqué massivement sur un gros volume de données (centaines de kB)
+\end{itemize}
+
+\subsection{Conséquence pour l'optimisation}
+
+Le facteur limitant des performances est la \textbf{hiérarchie mémoire pour les données}, pas le code. C'est pourquoi les optimisations comme :
+\begin{itemize}
+    \item \texttt{tempo} (cache blocking) : Améliore la localité des \textbf{données}
+    \item \texttt{unrol} (loop unrolling) : Réduit les instructions de contrôle mais cible les \textbf{données}
+\end{itemize}
+
+se concentrent sur l'amélioration de la localité des accès mémoire aux \textbf{données}, pas aux instructions.
+
+%=============================================================================
+\section{Recommandations}
+%=============================================================================
+
+\subsection{Configuration matérielle optimale}
+
+Pour améliorer significativement les performances, il faudrait :
+
+\begin{enumerate}
+    \item \textbf{Augmenter le L2 à 512 kB - 1 MB}
+    \begin{itemize}
+        \item Permettrait de contenir les 3 matrices (384 kB)
+        \item Réduction du miss rate de 50\% à <10\%
+    \end{itemize}
+    
+    \item \textbf{Ajouter un cache L3 de 2-4 MB}
+    \begin{itemize}
+        \item Marge pour working sets plus grands
+        \item Réduit les accès à la RAM
+    \end{itemize}
+    
+    \item \textbf{Augmenter l'associativité du L2 à 8-way ou 16-way}
+    \begin{itemize}
+        \item Réduit davantage les conflict misses
+        \item Synergie avec capacité augmentée
+    \end{itemize}
+    
+    \item \textbf{Augmenter le DL1 à 32 kB minimum}
+    \begin{itemize}
+        \item Permettrait au blocking de \texttt{tempo} d'être efficace
+        \item Réduction significative pour les tuiles 32×32
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Optimisations algorithmiques}
+
+Avec la configuration actuelle (caches petits), tous les algorithmes sont équivalents. Pour des caches plus grands :
+
+\begin{itemize}
+    \item \textbf{Cache blocking} (\texttt{tempo}) : Tuiles de 32×32 ou 64×64 adaptées au L1
+    \item \textbf{Combinaison blocking + unrolling} : Gain maximal
+    \item \textbf{Éviter pointer} : Indirections nuisent à la localité
+\end{itemize}
+
+%=============================================================================
+\section{Conclusion}
+%=============================================================================
+
+Ce TP a permis d'évaluer quantitativement l'impact de l'organisation des caches sur les performances de la multiplication de matrices. Les résultats mettent en évidence :
+
+\begin{enumerate}
+    \item \textbf{Excellente localité du code} : Miss rates <2.5\% pour les instructions
+    \item \textbf{Mauvaise localité des données} : Miss rates >44\% dus à un problème de capacité
+    \item \textbf{Gain modéré de l'associativité} : 5-7\% d'amélioration C1→C2, mais insuffisant
+    \item \textbf{Nécessité de caches plus grands} : Le facteur limitant est la capacité, pas l'organisation
+\end{enumerate}
+
+L'analyse démontre que pour des applications à forte intensité de calcul sur de grandes structures de données, la \textbf{capacité des caches} est le paramètre critique, bien plus que leur associativité ou leur latence.
+
+Les outils développés (scripts d'automatisation) permettent d'étendre cette étude à d'autres configurations de caches ou d'autres algorithmes, facilitant l'exploration de l'espace de design des architectures de processeurs.
+
+%=============================================================================
+\section*{Annexes}
+\addcontentsline{toc}{section}{Annexes}
+%=============================================================================
+
+\subsection*{A. Code source complet}
+
+Les scripts développés sont disponibles sur GitHub :
+
+\begin{center}
+\url{https://github.com/votre-username/tp3-caches}
+\end{center}
+
+\subsection*{B. Fichiers générés}
+
+\begin{itemize}
+    \item \texttt{simulations.sh} : Lancement automatique des 8 simulations
+    \item \texttt{resultats.sh} : Extraction et affichage des miss rates
+    \item \texttt{se\_A7.py} : Configuration gem5 pour les deux architectures
+    \item 8 dossiers \texttt{m5out\_*} : Résultats complets des simulations
+\end{itemize}
+
+\subsection*{C. Statistiques détaillées}
+
+Pour consultation complète, les fichiers \texttt{stats.txt} de chaque simulation contiennent plus de 1400 lignes de statistiques détaillées incluant :
+\begin{itemize}
+    \item Nombre total d'instructions exécutées
+    \item Temps de simulation en cycles
+    \item Statistiques de latence pour chaque niveau de cache
+    \item Distribution des types d'accès (lecture/écriture)
+    \item Statistiques MSHR (Miss Status Handling Registers)
+\end{itemize}
+
+\end{document}
